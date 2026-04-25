@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+
+{% block title %}Inventario - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="fas fa-clipboard-list"></i> Control de Inventario</h1>
+    </div>
+</div>
+
+<!-- Tarjetas de resumen -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <h6>Total Productos</h6>
+                <h3 id="resumenTotal">-</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <h6>Stock Bajo</h6>
+                <h3 id="resumenStockBajo">-</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <h6>Valor Inventario</h6>
+                <h5 id="resumenValor">-</h5>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white">
+            <div class="card-body">
+                <h6>Movimientos Mes</h6>
+                <h3 id="resumenMovimientos">-</h3>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Lista de productos con stock -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="row">
+                    <div class="col-md-6">
+                        <input type="text" id="buscarProductoInv" class="form-control" placeholder="Buscar producto...">
+                    </div>
+                    <div class="col-md-3">
+                        <select id="filtroStock" class="form-select">
+                            <option value="todos">Todos los productos</option>
+                            <option value="bajo">Stock bajo (<= mínimo)</option>
+                            <option value="normal">Stock normal</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select id="filtroCategoriaInv" class="form-select">
+                            <option value="">Todas las categorías</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Producto</th>
+                                <th>Categoría</th>
+                                <th>Stock Actual</th>
+                                <th>Stock Mínimo</th>
+                                <th>Precio Compra</th>
+                                <th>Precio Venta</th>
+                                <th>Valor Inventario</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tablaInventario"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal ajuste de inventario -->
+<div class="modal fade" id="modalAjuste" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title"><i class="fas fa-edit"></i> Ajuste de Inventario</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="ajuste_producto_id">
+                <div class="mb-3">
+                    <label class="form-label">Producto</label>
+                    <input type="text" id="ajuste_producto_nombre" class="form-control" readonly>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Stock Actual</label>
+                    <input type="text" id="ajuste_stock_actual" class="form-control" readonly>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Tipo de Ajuste</label>
+                    <select id="ajuste_tipo" class="form-select">
+                        <option value="ajuste_positivo">Incrementar Stock (+)</option>
+                        <option value="ajuste_negativo">Disminuir Stock (-)</option>
+                        <option value="baja">Dar de Baja</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Cantidad</label>
+                    <input type="number" id="ajuste_cantidad" class="form-control" value="1" min="1">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Motivo / Observación</label>
+                    <textarea id="ajuste_observacion" class="form-control" rows="2" placeholder="Ej: Ajuste por inventario físico, producto dañado, etc."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-warning" onclick="guardarAjuste()">Aplicar Ajuste</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal historial movimientos -->
+<div class="modal fade" id="modalHistorial" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="fas fa-history"></i> Historial de Movimientos</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <h6 id="historialProductoNombre"></h6>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Tipo</th>
+                                <th>Cantidad</th>
+                                <th>Stock Anterior</th>
+                                <th>Stock Nuevo</th>
+                                <th>Observación</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tablaHistorial"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let inventarioProductos = [];
+
+function cargarInventario() {
+    fetch('/api/productos')
+        .then(response => response.json())
+        .then(data => {
+            inventarioProductos = data;
+            actualizarResumen();
+            mostrarInventario(inventarioProductos);
+            cargarCategoriasFiltro();
+        });
+}
+
+function actualizarResumen() {
+    const total = inventarioProductos.length;
+    const stockBajo = inventarioProductos.filter(p => p.stock_actual <= p.stock_minimo).length;
+    const valorInventario = inventarioProductos.reduce((sum, p) => sum + (p.stock_actual * p.precio_compra), 0);
+    
+    document.getElementById('resumenTotal').textContent = total;
+    document.getElementById('resumenStockBajo').textContent = stockBajo;
+    document.getElementById('resumenValor').innerHTML = `$${formatNumber(valorInventario)}`;
+}
+
+function mostrarInventario(productos) {
+    const tbody = document.getElementById('tablaInventario');
+    if (productos.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center">No hay productos</td></tr>';
+        return;
+    }
+    
+    let html = '';
+    productos.forEach(p => {
+        const stockClass = p.stock_actual <= p.stock_minimo ? 'text-danger fw-bold' : '';
+        const valorInv = p.stock_actual * p.precio_compra;
+        html += `
+            <tr>
+                <td>${p.id}</td>
+                <td>${p.nombre}</td>
+                <td>${p.categoria_nombre || '-'}</td>
+                <td class="${stockClass}">${p.stock_actual}</td>
+                <td>${p.stock_minimo}</td>
+                <td>$${formatNumber(p.precio_compra)}</td>
+                <td>$${formatNumber(p.precio_venta)}</td>
+                <td>$${formatNumber(valorInv)}</td>
+                <td>
+                    <button class="btn btn-sm btn-warning" onclick="abrirAjuste(${p.id})">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-sm btn-info" onclick="verHistorial(${p.id})">
+                        <i class="fas fa-history"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = html;
+}
+
+function abrirAjuste(productoId) {
+    const producto = inventarioProductos.find(p => p.id === productoId);
+    if (producto) {
+        document.getElementById('ajuste_producto_id').value = producto.id;
+        document.getElementById('ajuste_producto_nombre').value = producto.nombre;
+        document.getElementById('ajuste_stock_actual').value = producto.stock_actual;
+        document.getElementById('ajuste_cantidad').value = 1;
+        document.getElementById('ajuste_tipo').value = 'ajuste_positivo';
+        document.getElementById('ajuste_observacion').value = '';
+        new bootstrap.Modal(document.getElementById('modalAjuste')).show();
+    }
+}
+
+function guardarAjuste() {
+    const productoId = document.getElementById('ajuste_producto_id').value;
+    const tipo = document.getElementById('ajuste_tipo').value;
+    let cantidad = parseInt(document.getElementById('ajuste_cantidad').value);
+    const observacion = document.getElementById('ajuste_observacion').value;
+    const producto = inventarioProductos.find(p => p.id == productoId);
+    
+    let nuevoStock = producto.stock_actual;
+    let tipoMovimiento = '';
+    
+    if (tipo === 'ajuste_positivo') {
+        nuevoStock += cantidad;
+        tipoMovimiento = 'ajuste_positivo';
+    } else if (tipo === 'ajuste_negativo') {
+        nuevoStock -= cantidad;
+        tipoMovimiento = 'ajuste_negativo';
+    } else if (tipo === 'baja') {
+        nuevoStock = 0;
+        cantidad = producto.stock_actual;
+        tipoMovimiento = 'baja';
+    }
+    
+    if (nuevoStock < 0) {
+        mostrarAlerta('El stock no puede ser negativo', 'danger');
+        return;
+    }
+    
+    const data = {
+        producto_id: parseInt(productoId),
+        nuevo_stock: nuevoStock,
+        cantidad: cantidad,
+        tipo_movimiento: tipoMovimiento,
+        observacion: observacion,
+        stock_anterior: producto.stock_actual
+    };
+    
+    fetch('/api/inventario/ajustar', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message) {
+            mostrarAlerta('Inventario actualizado', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('modalAjuste')).hide();
+            cargarInventario();
+        } else {
+            mostrarAlerta(data.error || 'Error al ajustar', 'danger');
+        }
+    });
+}
+
+function verHistorial(productoId) {
+    const producto = inventarioProductos.find(p => p.id === productoId);
+    document.getElementById('historialProductoNombre').innerHTML = `<strong>${producto.nombre}</strong> - Historial de movimientos`;
+    
+    fetch(`/api/inventario/historial/${productoId}`)
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('tablaHistorial');
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center">Sin movimientos</td></tr>';
+            } else {
+                let html = '';
+                data.forEach(m => {
+                    const tipoClass = m.tipo_movimiento === 'venta' ? 'danger' : 
+                                     m.tipo_movimiento === 'compra' ? 'success' : 'warning';
+                    html += `
+                        <tr>
+                            <td>${new Date(m.created_at).toLocaleString()}</td>
+                            <td><span class="badge bg-${tipoClass}">${m.tipo_movimiento}</span></td>
+                            <td class="${m.cantidad < 0 ? 'text-danger' : 'text-success'}">${m.cantidad}</td>
+                            <td>${m.stock_anterior || '-'}</td>
+                            <td>${m.stock_nuevo || '-'}</td>
+                            <td>${m.observaciones || '-'}</td>
+                        </tr>
+                    `;
+                });
+                tbody.innerHTML = html;
+            }
+        });
+    
+    new bootstrap.Modal(document.getElementById('modalHistorial')).show();
+}
+
+function cargarCategoriasFiltro() {
+    fetch('/api/categorias')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('filtroCategoriaInv');
+            data.forEach(cat => {
+                select.innerHTML += `<option value="${cat.nombre}">${cat.nombre}</option>`;
+            });
+        });
+}
+
+function filtrarInventario() {
+    const search = document.getElementById('buscarProductoInv').value.toLowerCase();
+    const stockFiltro = document.getElementById('filtroStock').value;
+    const categoriaFiltro = document.getElementById('filtroCategoriaInv').value;
+    
+    let filtrados = inventarioProductos.filter(p => 
+        p.nombre.toLowerCase().includes(search)
+    );
+    
+    if (stockFiltro === 'bajo') {
+        filtrados = filtrados.filter(p => p.stock_actual <= p.stock_minimo);
+    }
+    
+    if (categoriaFiltro) {
+        filtrados = filtrados.filter(p => p.categoria_nombre === categoriaFiltro);
+    }
+    
+    mostrarInventario(filtrados);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    cargarInventario();
+    document.getElementById('buscarProductoInv').addEventListener('keyup', filtrarInventario);
+    document.getElementById('filtroStock').addEventListener('change', filtrarInventario);
+    document.getElementById('filtroCategoriaInv').addEventListener('change', filtrarInventario);
+});
+</script>
+{% endblock %}

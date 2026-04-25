@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+
+{% block title %}Productos - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="fas fa-boxes"></i> Productos</h1>
+            <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modalProducto" onclick="limpiarFormulario()">
+                <i class="fas fa-plus"></i> Nuevo Producto
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="row">
+                    <div class="col-md-6">
+                        <input type="text" id="searchProducto" class="form-control" placeholder="Buscar producto...">
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Código</th>
+                                <th>Nombre</th>
+                                <th>Categoría</th>
+                                <th>Precio Compra</th>
+                                <th>Precio Venta</th>
+                                <th>Stock</th>
+                                <th>Stock Mínimo</th>
+                                <th>Requiere Pedido</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-productos">
+                            <tr><td colspan="10" class="text-center">Cargando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para producto -->
+<div class="modal fade" id="modalProducto" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="fas fa-box"></i> Producto</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="formProducto">
+                    <input type="hidden" id="producto_id">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Código de Barras</label>
+                            <input type="text" id="codigo_barras" class="form-control">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Nombre *</label>
+                            <input type="text" id="nombre" class="form-control" required>
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label class="form-label">Descripción</label>
+                            <textarea id="descripcion" class="form-control" rows="2"></textarea>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Categoría *</label>
+                            <select id="categoria_id" class="form-select" required>
+                                <option value="">Seleccione...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Precio Compra *</label>
+                            <input type="number" id="precio_compra" class="form-control" step="100" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Precio Venta *</label>
+                            <input type="number" id="precio_venta" class="form-control" step="100" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Stock Actual</label>
+                            <input type="number" id="stock_actual" class="form-control" value="0">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Stock Mínimo</label>
+                            <input type="number" id="stock_minimo" class="form-control" value="5">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Requiere Pedido a Proveedor</label>
+                            <select id="requiere_pedido" class="form-select">
+                                <option value="false">No</option>
+                                <option value="true">Sí (Uniforme, Carnet, etc.)</option>
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" onclick="guardarProducto()">Guardar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let productosData = [];
+
+function cargarProductos() {
+    fetch('/api/productos')
+        .then(response => response.json())
+        .then(data => {
+            productosData = data;
+            mostrarProductos(data);
+        })
+        .catch(error => console.error('Error:', error));
+}
+
+function mostrarProductos(productos) {
+    const tbody = document.getElementById('tabla-productos');
+    if (productos.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center">No hay productos</td></tr>';
+        return;
+    }
+    
+    let html = '';
+    productos.forEach(p => {
+        const stockClass = p.stock_actual <= p.stock_minimo ? 'text-danger fw-bold' : '';
+        html += `
+            <tr>
+                <td>${p.id}</td>
+                <td>${p.codigo_barras || '-'}</td>
+                <td>${p.nombre}</td>
+                <td>${p.categoria_nombre || '-'}</td>
+                <td>$${formatNumber(p.precio_compra)}</td>
+                <td>$${formatNumber(p.precio_venta)}</td>
+                <td class="${stockClass}">${p.stock_actual}</td>
+                <td>${p.stock_minimo}</td>
+                <td>${p.requiere_pedido ? '<span class="badge bg-warning">Sí</span>' : '<span class="badge bg-secondary">No</span>'}</td>
+                <td>
+                    <button class="btn btn-sm btn-warning" onclick="editarProducto(${p.id})">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="eliminarProducto(${p.id})">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = html;
+}
+
+function cargarCategorias() {
+    fetch('/api/categorias')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('categoria_id');
+            select.innerHTML = '<option value="">Seleccione...</option>';
+            data.forEach(cat => {
+                select.innerHTML += `<option value="${cat.id}">${cat.nombre}</option>`;
+            });
+        });
+}
+
+function limpiarFormulario() {
+    document.getElementById('producto_id').value = '';
+    document.getElementById('codigo_barras').value = '';
+    document.getElementById('nombre').value = '';
+    document.getElementById('descripcion').value = '';
+    document.getElementById('precio_compra').value = '';
+    document.getElementById('precio_venta').value = '';
+    document.getElementById('stock_actual').value = '0';
+    document.getElementById('stock_minimo').value = '5';
+    document.getElementById('categoria_id').value = '';
+    document.getElementById('requiere_pedido').value = 'false';
+}
+
+function editarProducto(id) {
+    const producto = productosData.find(p => p.id === id);
+    if (producto) {
+        document.getElementById('producto_id').value = producto.id;
+        document.getElementById('codigo_barras').value = producto.codigo_barras || '';
+        document.getElementById('nombre').value = producto.nombre;
+        document.getElementById('descripcion').value = producto.descripcion || '';
+        document.getElementById('precio_compra').value = producto.precio_compra;
+        document.getElementById('precio_venta').value = producto.precio_venta;
+        document.getElementById('stock_actual').value = producto.stock_actual;
+        document.getElementById('stock_minimo').value = producto.stock_minimo;
+        document.getElementById('categoria_id').value = producto.categoria_id || '';
+        document.getElementById('requiere_pedido').value = producto.requiere_pedido ? 'true' : 'false';
+        
+        new bootstrap.Modal(document.getElementById('modalProducto')).show();
+    }
+}
+
+function guardarProducto() {
+    const id = document.getElementById('producto_id').value;
+    const data = {
+        nombre: document.getElementById('nombre').value,
+        codigo_barras: document.getElementById('codigo_barras').value,
+        descripcion: document.getElementById('descripcion').value,
+        categoria_id: document.getElementById('categoria_id').value,
+        precio_compra: parseFloat(document.getElementById('precio_compra').value),
+        precio_venta: parseFloat(document.getElementById('precio_venta').value),
+        stock_actual: parseInt(document.getElementById('stock_actual').value),
+        stock_minimo: parseInt(document.getElementById('stock_minimo').value),
+        requiere_pedido: document.getElementById('requiere_pedido').value === 'true'
+    };
+    
+    const url = id ? `/api/productos/${id}` : '/api/productos';
+    const method = id ? 'PUT' : 'POST';
+    
+    fetch(url, {
+        method: method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.id || data.message) {
+            bootstrap.Modal.getInstance(document.getElementById('modalProducto')).hide();
+            cargarProductos();
+            mostrarAlerta('Producto guardado exitosamente', 'success');
+        } else {
+            mostrarAlerta(data.error || 'Error al guardar', 'danger');
+        }
+    });
+}
+
+function eliminarProducto(id) {
+    if (confirm('¿Eliminar este producto?')) {
+        fetch(`/api/productos/${id}`, {method: 'DELETE'})
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    cargarProductos();
+                    mostrarAlerta('Producto eliminado', 'success');
+                }
+            });
+    }
+}
+
+// Búsqueda
+document.getElementById('searchProducto').addEventListener('keyup', (e) => {
+    const search = e.target.value.toLowerCase();
+    const filtrados = productosData.filter(p => 
+        p.nombre.toLowerCase().includes(search) || 
+        (p.codigo_barras && p.codigo_barras.toLowerCase().includes(search))
+    );
+    mostrarProductos(filtrados);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    cargarProductos();
+    cargarCategorias();
+});
+</script>
+{% endblock %}

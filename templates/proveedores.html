@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}Proveedores - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="fas fa-truck"></i> Proveedores</h1>
+            <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modalProveedor" onclick="limpiarFormulario()">
+                <i class="fas fa-plus"></i> Nuevo Proveedor
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="row">
+                    <div class="col-md-6">
+                        <input type="text" id="buscarProveedor" class="form-control" placeholder="Buscar proveedor...">
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>NIT</th>
+                                <th>Nombre</th>
+                                <th>Teléfono</th>
+                                <th>Email</th>
+                                <th>Dirección</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-proveedores">
+                            <tr><td colspan="7" class="text-center">Cargando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para Proveedor -->
+<div class="modal fade" id="modalProveedor" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="fas fa-truck"></i> Proveedor</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="formProveedor">
+                    <input type="hidden" id="proveedor_id">
+                    <div class="mb-3">
+                        <label class="form-label">NIT *</label>
+                        <input type="text" id="nit" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nombre *</label>
+                        <input type="text" id="nombre" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Teléfono</label>
+                        <input type="text" id="telefono" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" id="email" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Dirección</label>
+                        <textarea id="direccion" class="form-control" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" onclick="guardarProveedor()">Guardar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let proveedoresData = [];
+
+function cargarProveedores() {
+    fetch('/api/proveedores')
+        .then(response => response.json())
+        .then(data => {
+            proveedoresData = data;
+            mostrarProveedores(data);
+        })
+        .catch(error => console.error('Error:', error));
+}
+
+function mostrarProveedores(proveedores) {
+    const tbody = document.getElementById('tabla-proveedores');
+    if (proveedores.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">No hay proveedores</td></tr>';
+        return;
+    }
+    
+    let html = '';
+    proveedores.forEach(p => {
+        html += `
+            <tr>
+                <td>${p.id}</td>
+                <td>${p.nit}</td>
+                <td>${p.nombre}</td>
+                <td>${p.telefono || '-'}</td>
+                <td>${p.email || '-'}</td>
+                <td>${p.direccion || '-'}</td>
+                <td>
+                    <button class="btn btn-sm btn-warning" onclick="editarProveedor(${p.id})">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="eliminarProveedor(${p.id})">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = html;
+}
+
+function limpiarFormulario() {
+    document.getElementById('proveedor_id').value = '';
+    document.getElementById('nit').value = '';
+    document.getElementById('nombre').value = '';
+    document.getElementById('telefono').value = '';
+    document.getElementById('email').value = '';
+    document.getElementById('direccion').value = '';
+}
+
+function editarProveedor(id) {
+    const proveedor = proveedoresData.find(p => p.id === id);
+    if (proveedor) {
+        document.getElementById('proveedor_id').value = proveedor.id;
+        document.getElementById('nit').value = proveedor.nit;
+        document.getElementById('nombre').value = proveedor.nombre;
+        document.getElementById('telefono').value = proveedor.telefono || '';
+        document.getElementById('email').value = proveedor.email || '';
+        document.getElementById('direccion').value = proveedor.direccion || '';
+        new bootstrap.Modal(document.getElementById('modalProveedor')).show();
+    }
+}
+
+function guardarProveedor() {
+    const id = document.getElementById('proveedor_id').value;
+    const data = {
+        nit: document.getElementById('nit').value,
+        nombre: document.getElementById('nombre').value,
+        telefono: document.getElementById('telefono').value,
+        email: document.getElementById('email').value,
+        direccion: document.getElementById('direccion').value
+    };
+    
+    const url = id ? `/api/proveedores/${id}` : '/api/proveedores';
+    const method = id ? 'PUT' : 'POST';
+    
+    fetch(url, {
+        method: method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.id || data.message) {
+            bootstrap.Modal.getInstance(document.getElementById('modalProveedor')).hide();
+            cargarProveedores();
+            mostrarAlerta('Proveedor guardado exitosamente', 'success');
+        } else {
+            mostrarAlerta(data.error || 'Error al guardar', 'danger');
+        }
+    });
+}
+
+function eliminarProveedor(id) {
+    if (confirm('¿Eliminar este proveedor?')) {
+        fetch(`/api/proveedores/${id}`, {method: 'DELETE'})
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    cargarProveedores();
+                    mostrarAlerta('Proveedor eliminado', 'success');
+                } else {
+                    mostrarAlerta(data.error || 'Error al eliminar', 'danger');
+                }
+            });
+    }
+}
+
+// Búsqueda
+document.getElementById('buscarProveedor').addEventListener('keyup', (e) => {
+    const search = e.target.value.toLowerCase();
+    const filtrados = proveedoresData.filter(p => 
+        p.nombre.toLowerCase().includes(search) || 
+        p.nit.toLowerCase().includes(search)
+    );
+    mostrarProveedores(filtrados);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    cargarProveedores();
+});
+</script>
+{% endblock %}

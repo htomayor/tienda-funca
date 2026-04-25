@@ -1,0 +1,1440 @@
+from flask import Flask, render_template, jsonify, request
+from flask_cors import CORS
+from utils.db import get_db_connection, init_db
+import os
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__, 
+            template_folder='templates',
+            static_folder='static')
+app.secret_key = os.getenv('SECRET_KEY', 'tienda-funca-secret')
+CORS(app)
+
+# ============================================
+# RUTAS PRINCIPALES
+# ============================================
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/productos')
+def productos():
+    return render_template('productos.html')
+
+@app.route('/ventas')
+def ventas():
+    return render_template('ventas.html')
+
+@app.route('/compras')
+def compras():
+    return render_template('compras.html')
+
+@app.route('/inventario')
+def inventario():
+    return render_template('inventario.html')
+
+@app.route('/clientes')
+def clientes():
+    return render_template('clientes.html')
+
+@app.route('/reportes')
+def reportes():
+    return render_template('reportes.html')
+
+@app.route('/proveedores')
+def proveedores():
+    return render_template('proveedores.html')
+
+@app.route('/pedidos')
+def pedidos():
+    return render_template('pedidos.html')
+
+# ============================================
+# API - DASHBOARD
+# ============================================
+
+@app.route('/api/dashboard/stats')
+def get_dashboard_stats():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) FROM productos WHERE activo = true")
+        total_productos = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM productos WHERE stock_actual <= stock_minimo AND activo = true")
+        stock_bajo = cur.fetchone()[0]
+        
+        cur.execute("""
+            SELECT COUNT(*), COALESCE(SUM(total), 0) 
+            FROM ventas 
+            WHERE DATE(fecha_venta) = CURRENT_DATE
+        """)
+        ventas_hoy, ventas_hoy_total = cur.fetchone()
+        
+        cur.execute("""
+            SELECT COALESCE(SUM(total), 0) 
+            FROM ventas 
+            WHERE EXTRACT(YEAR FROM fecha_venta) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND EXTRACT(MONTH FROM fecha_venta) = EXTRACT(MONTH FROM CURRENT_DATE)
+        """)
+        ventas_mes = cur.fetchone()[0] or 0
+        
+        cur.execute("SELECT COALESCE(SUM(stock_actual * precio_compra), 0) FROM productos WHERE activo = true")
+        valor_inventario = cur.fetchone()[0] or 0
+        
+        cur.execute("""
+            SELECT p.nombre, SUM(vd.cantidad) as total_vendido
+            FROM ventas_detalle vd
+            JOIN productos p ON vd.producto_id = p.id
+            GROUP BY p.nombre
+            ORDER BY total_vendido DESC
+            LIMIT 5
+        """)
+        top_productos = [{'nombre': row[0], 'total': row[1]} for row in cur.fetchall()]
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'total_productos': total_productos,
+            'stock_bajo': stock_bajo,
+            'ventas_hoy': ventas_hoy or 0,
+            'ventas_hoy_total': float(ventas_hoy_total or 0),
+            'ventas_mes': float(ventas_mes),
+            'valor_inventario': float(valor_inventario),
+            'top_productos': top_productos
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - PRODUCTOS
+# ============================================
+
+@app.route('/api/productos', methods=['GET'])
+def get_productos():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        search = request.args.get('search', '')
+        
+        query = """
+            SELECT p.*, c.nombre as categoria_nombre 
+            FROM productos p
+            LEFT JOIN categorias c ON p.categoria_id = c.id
+            WHERE p.activo = true
+        """
+        params = []
+        
+        if search:
+            query += " AND (p.nombre ILIKE %s OR p.codigo_barras ILIKE %s)"
+            params.extend([f'%{search}%', f'%{search}%'])
+        
+        query += " ORDER BY p.nombre"
+        
+        cur.execute(query, params)
+        productos = cur.fetchall()
+        
+        colnames = [desc[0] for desc in cur.description]
+        result = []
+        for row in productos:
+            producto = dict(zip(colnames, row))
+            producto['precio_compra'] = float(producto['precio_compra']) if producto['precio_compra'] else 0
+            producto['precio_venta'] = float(producto['precio_venta']) if producto['precio_venta'] else 0
+            result.append(producto)
+        
+        cur.close()
+        conn.close()
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/productos', methods=['POST'])
+def create_producto():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO productos (nombre, codigo_barras, descripcion, categoria_id, 
+                                   precio_compra, precio_venta, stock_actual, stock_minimo, requiere_pedido)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (data['nombre'], data.get('codigo_barras'), data.get('descripcion'),
+              data.get('categoria_id'), data['precio_compra'], data['precio_venta'],
+              data.get('stock_actual', 0), data.get('stock_minimo', 5),
+              data.get('requiere_pedido', False)))
+        
+        producto_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'id': producto_id, 'message': 'Producto creado exitosamente'}), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/productos/<int:producto_id>', methods=['PUT'])
+def update_producto(producto_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE productos 
+            SET nombre = %s, codigo_barras = %s, descripcion = %s, 
+                categoria_id = %s, precio_compra = %s, precio_venta = %s,
+                stock_minimo = %s, requiere_pedido = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (data['nombre'], data.get('codigo_barras'), data.get('descripcion'),
+              data.get('categoria_id'), data['precio_compra'], data['precio_venta'],
+              data.get('stock_minimo', 5), data.get('requiere_pedido', False), producto_id))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'message': 'Producto actualizado exitosamente'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/productos/<int:producto_id>', methods=['DELETE'])
+def delete_producto(producto_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE productos SET activo = false WHERE id = %s", (producto_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'message': 'Producto eliminado exitosamente'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - VENTAS
+# ============================================
+
+@app.route('/api/ventas', methods=['POST'])
+def registrar_venta():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        productos_normales = []
+        productos_pedido = []
+        
+        for item in data['productos']:
+            cur.execute("SELECT id, nombre, stock_actual, requiere_pedido, proveedor_preferido_id FROM productos WHERE id = %s", (item['producto_id'],))
+            prod = cur.fetchone()
+            if not prod:
+                conn.rollback()
+                return jsonify({'error': f'Producto no encontrado'}), 400
+            
+            if prod[3] or prod[2] < item['cantidad']:
+                productos_pedido.append((item, prod))
+            else:
+                productos_normales.append((item, prod))
+        
+        subtotal = sum(i['subtotal'] for i in data['productos'])
+        iva = subtotal * 0.19
+        total = subtotal + iva
+        
+        estado_venta = 'completada' if not productos_pedido else 'pendiente'
+        cur.execute("""
+            INSERT INTO ventas (cliente_id, numero_factura, subtotal, iva, total, forma_pago, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (data['cliente_id'], data['numero_factura'], subtotal, iva, total, data['forma_pago'], estado_venta))
+        venta_id = cur.fetchone()[0]
+        
+        for item in data['productos']:
+            cur.execute("""
+                INSERT INTO ventas_detalle (venta_id, producto_id, cantidad, precio_unitario, subtotal)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (venta_id, item['producto_id'], item['cantidad'], item['precio'], item['subtotal']))
+        
+        for item, prod in productos_normales:
+            prod_id = prod[0]
+            stock_anterior = prod[2]
+            stock_nuevo = stock_anterior - item['cantidad']
+            cur.execute("UPDATE productos SET stock_actual = %s WHERE id = %s", (stock_nuevo, prod_id))
+            cur.execute("""
+                INSERT INTO movimientos_inventario (producto_id, tipo_movimiento, cantidad, precio_unitario, valor_total, stock_anterior, stock_nuevo)
+                VALUES (%s, 'venta', %s, %s, %s, %s, %s)
+            """, (prod_id, -item['cantidad'], item['precio'], item['subtotal'], stock_anterior, stock_nuevo))
+        
+        pedidos_generados = 0
+        if productos_pedido:
+            pedidos_por_proveedor = {}
+            for item, prod in productos_pedido:
+                proveedor_id = prod[4]
+                if not proveedor_id:
+                    cur.execute("SELECT id FROM proveedores LIMIT 1")
+                    proveedor_id = cur.fetchone()[0]
+                if proveedor_id not in pedidos_por_proveedor:
+                    pedidos_por_proveedor[proveedor_id] = []
+                pedidos_por_proveedor[proveedor_id].append((item, prod))
+            
+            for proveedor_id, items in pedidos_por_proveedor.items():
+                num_pedido = f"PED-{venta_id}-{proveedor_id}-{int(datetime.now().timestamp())}"
+                cur.execute("""
+                    INSERT INTO pedidos_proveedor (venta_id, proveedor_id, numero_pedido, estado)
+                    VALUES (%s, %s, %s, 'pendiente') RETURNING id
+                """, (venta_id, proveedor_id, num_pedido))
+                pedido_id = cur.fetchone()[0]
+                pedidos_generados += 1
+                
+                for item, prod in items:
+                    cur.execute("""
+                        INSERT INTO pedidos_proveedor_detalle (pedido_id, producto_id, cantidad_solicitada, cantidad_recibida, precio_unitario_sugerido, subtotal)
+                        VALUES (%s, %s, %s, 0, %s, %s)
+                    """, (pedido_id, prod[0], item['cantidad'], item['precio'], item['subtotal']))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        if productos_pedido:
+            return jsonify({
+                'id': venta_id,
+                'factura': data['numero_factura'],
+                'estado': 'pendiente',
+                'message': 'Venta registrada. Productos bajo pedido - se generó orden al proveedor.',
+                'pedidos_generados': pedidos_generados
+            }), 201
+        else:
+            return jsonify({
+                'id': venta_id,
+                'factura': data['numero_factura'],
+                'estado': 'completada',
+                'message': 'Venta completada exitosamente'
+            }), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ventas', methods=['GET'])
+def get_ventas():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT v.*, c.nombres, c.apellidos, c.documento
+            FROM ventas v
+            LEFT JOIN clientes c ON v.cliente_id = c.id
+            ORDER BY v.fecha_venta DESC
+            LIMIT 50
+        """)
+        
+        ventas = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        
+        result = []
+        for row in ventas:
+            venta = dict(zip(colnames, row))
+            venta['subtotal'] = float(venta['subtotal']) if venta['subtotal'] else 0
+            venta['total'] = float(venta['total']) if venta['total'] else 0
+            result.append(venta)
+        
+        cur.close()
+        conn.close()
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - CATEGORÍAS Y CLIENTES
+# ============================================
+
+@app.route('/api/categorias', methods=['GET'])
+def get_categorias():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, nombre, descripcion, created_at FROM categorias ORDER BY nombre")
+        categorias = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'id': c[0], 'nombre': c[1]} for c in categorias])
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clientes', methods=['GET'])
+def get_clientes():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tipo, documento, nombres, apellidos, telefono, email
+            FROM clientes 
+            ORDER BY nombres
+        """)
+        clientes = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        
+        result = [dict(zip(colnames, row)) for row in clientes]
+        cur.close()
+        conn.close()
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clientes', methods=['POST'])
+def create_cliente():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO clientes (tipo, documento, nombres, apellidos, telefono, email, direccion)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (data['tipo'], data['documento'], data['nombres'], data['apellidos'],
+              data.get('telefono'), data.get('email'), data.get('direccion')))
+        
+        cliente_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'id': cliente_id, 'message': 'Cliente creado exitosamente'}), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clientes/<int:cliente_id>', methods=['PUT'])
+def update_cliente(cliente_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE clientes 
+            SET tipo = %s, documento = %s, nombres = %s, apellidos = %s, 
+                telefono = %s, email = %s, direccion = %s
+            WHERE id = %s
+        """, (data['tipo'], data['documento'], data['nombres'], data['apellidos'],
+              data.get('telefono'), data.get('email'), data.get('direccion'), cliente_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Cliente actualizado'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clientes/<int:cliente_id>', methods=['DELETE'])
+def delete_cliente(cliente_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM clientes WHERE id = %s", (cliente_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Cliente eliminado'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - PROVEEDORES (CRUD completo)
+# ============================================
+
+@app.route('/api/proveedores', methods=['GET'])
+def get_proveedores():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, nit, nombre, telefono, email, direccion FROM proveedores ORDER BY nombre")
+        proveedores = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = [dict(zip(colnames, row)) for row in proveedores]
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/proveedores', methods=['POST'])
+def create_proveedor():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO proveedores (nit, nombre, telefono, email, direccion)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+        """, (data['nit'], data['nombre'], data.get('telefono'), data.get('email'), data.get('direccion')))
+        
+        proveedor_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'id': proveedor_id, 'message': 'Proveedor creado'}), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/proveedores/<int:proveedor_id>', methods=['PUT'])
+def update_proveedor(proveedor_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE proveedores 
+            SET nit = %s, nombre = %s, telefono = %s, email = %s, direccion = %s
+            WHERE id = %s
+        """, (data['nit'], data['nombre'], data.get('telefono'), data.get('email'), data.get('direccion'), proveedor_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Proveedor actualizado'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/proveedores/<int:proveedor_id>', methods=['DELETE'])
+def delete_proveedor(proveedor_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM proveedores WHERE id = %s", (proveedor_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Proveedor eliminado'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - PEDIDOS (ventas bajo pedido)
+# ============================================
+
+@app.route('/api/pedidos-venta', methods=['GET'])
+def get_pedidos_venta():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT pv.id, pv.numero_pedido, pv.fecha_pedido, pv.estado,
+                   v.numero_factura, c.nombres || ' ' || c.apellidos as cliente,
+                   pr.nombre as proveedor
+            FROM pedidos_proveedor pv
+            JOIN ventas v ON pv.venta_id = v.id
+            JOIN clientes c ON v.cliente_id = c.id
+            JOIN proveedores pr ON pv.proveedor_id = pr.id
+            ORDER BY pv.fecha_pedido DESC
+        """)
+        pedidos = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = [dict(zip(colnames, row)) for row in pedidos]
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pedidos-venta/<int:pedido_id>/detalle', methods=['GET'])
+def get_pedido_detalle(pedido_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT pv.id, pv.numero_pedido, pv.fecha_pedido, pv.estado,
+                   v.numero_factura, c.nombres || ' ' || c.apellidos as cliente,
+                   pr.nombre as proveedor
+            FROM pedidos_proveedor pv
+            JOIN ventas v ON pv.venta_id = v.id
+            JOIN clientes c ON v.cliente_id = c.id
+            JOIN proveedores pr ON pv.proveedor_id = pr.id
+            WHERE pv.id = %s
+        """, (pedido_id,))
+        pedido = cur.fetchone()
+        
+        if not pedido:
+            return jsonify({'error': 'Pedido no encontrado'}), 404
+        
+        colnames = [desc[0] for desc in cur.description]
+        resultado = dict(zip(colnames, pedido))
+        
+        cur.execute("""
+            SELECT pvd.producto_id, prod.nombre, pvd.cantidad_solicitada, 
+                   pvd.cantidad_recibida, prod.precio_compra
+            FROM pedidos_proveedor_detalle pvd
+            JOIN productos prod ON pvd.producto_id = prod.id
+            WHERE pvd.pedido_id = %s
+        """, (pedido_id,))
+        productos = cur.fetchall()
+        
+        resultado['productos'] = []
+        for prod in productos:
+            resultado['productos'].append({
+                'producto_id': prod[0],
+                'nombre': prod[1],
+                'cantidad_solicitada': prod[2],
+                'cantidad_recibida': prod[3],
+                'precio': float(prod[4]) if prod[4] else 0
+            })
+        
+        cur.close()
+        conn.close()
+        return jsonify(resultado)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pedidos/<int:pedido_id>/recibir', methods=['POST'])
+def recibir_pedido(pedido_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        cur.execute("SELECT venta_id, proveedor_id, estado FROM pedidos_proveedor WHERE id = %s", (pedido_id,))
+        pedido = cur.fetchone()
+        if not pedido:
+            return jsonify({'error': 'Pedido no encontrado'}), 404
+        venta_id, proveedor_id, estado_pedido = pedido
+        
+        for item in data['productos']:
+            prod_id = item['producto_id']
+            cantidad = item['cantidad_recibida']
+            
+            cur.execute("""
+                UPDATE pedidos_proveedor_detalle 
+                SET cantidad_recibida = cantidad_recibida + %s 
+                WHERE pedido_id = %s AND producto_id = %s
+                RETURNING cantidad_solicitada, cantidad_recibida
+            """, (cantidad, pedido_id, prod_id))
+            row = cur.fetchone()
+            if not row:
+                continue
+            
+            cur.execute("SELECT stock_actual FROM productos WHERE id = %s", (prod_id,))
+            stock_anterior = cur.fetchone()[0]
+            stock_nuevo = stock_anterior + cantidad
+            cur.execute("UPDATE productos SET stock_actual = %s WHERE id = %s", (stock_nuevo, prod_id))
+            
+            cur.execute("""
+                INSERT INTO movimientos_inventario (producto_id, tipo_movimiento, cantidad, stock_anterior, stock_nuevo, observaciones)
+                VALUES (%s, 'recepcion_pedido', %s, %s, %s, %s)
+            """, (prod_id, cantidad, stock_anterior, stock_nuevo, f"Recepción de pedido {pedido_id}"))
+        
+        cur.execute("""
+            SELECT COUNT(*) FROM pedidos_proveedor_detalle 
+            WHERE pedido_id = %s AND cantidad_recibida < cantidad_solicitada
+        """, (pedido_id,))
+        pendientes = cur.fetchone()[0]
+        
+        if pendientes == 0:
+            cur.execute("UPDATE pedidos_proveedor SET estado = 'recibido_total' WHERE id = %s", (pedido_id,))
+            
+            cur.execute("""
+                SELECT COUNT(*) FROM pedidos_proveedor 
+                WHERE venta_id = %s AND estado != 'recibido_total'
+            """, (venta_id,))
+            pedidos_pendientes_venta = cur.fetchone()[0]
+            if pedidos_pendientes_venta == 0:
+                cur.execute("UPDATE ventas SET estado = 'completada' WHERE id = %s", (venta_id,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'message': 'Recepción registrada correctamente'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - INVENTARIO
+# ============================================
+
+@app.route('/api/inventario/ajustar', methods=['POST'])
+def ajustar_inventario():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        cur.execute("UPDATE productos SET stock_actual = %s WHERE id = %s RETURNING stock_actual", 
+                   (data['nuevo_stock'], data['producto_id']))
+        
+        cur.execute("""
+            INSERT INTO movimientos_inventario (producto_id, tipo_movimiento, cantidad, 
+                                               observaciones, stock_anterior, stock_nuevo)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (data['producto_id'], data['tipo_movimiento'], data['cantidad'],
+              data['observacion'], data['stock_anterior'], data['nuevo_stock']))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'message': 'Inventario actualizado correctamente'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/inventario/historial/<int:producto_id>', methods=['GET'])
+def get_historial_inventario(producto_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT * FROM movimientos_inventario 
+            WHERE producto_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT 50
+        """, (producto_id,))
+        movimientos = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = [dict(zip(colnames, row)) for row in movimientos]
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - COMPRAS
+# ============================================
+
+@app.route('/api/compras', methods=['GET'])
+def get_compras():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.*, p.nombre as proveedor_nombre 
+            FROM compras c
+            LEFT JOIN proveedores p ON c.proveedor_id = p.id
+            ORDER BY c.fecha_compra DESC
+        """)
+        compras = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = []
+        for row in compras:
+            compra = dict(zip(colnames, row))
+            compra['subtotal'] = float(compra['subtotal']) if compra['subtotal'] else 0
+            compra['iva'] = float(compra['iva']) if compra['iva'] else 0
+            compra['total'] = float(compra['total']) if compra['total'] else 0
+            result.append(compra)
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/compras', methods=['POST'])
+def create_compra():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        cur.execute("""
+            INSERT INTO compras (proveedor_id, numero_factura, fecha_compra, subtotal, iva, total)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+        """, (data['proveedor_id'], data['numero_factura'], data['fecha_compra'],
+              data['subtotal'], data['iva'], data['total']))
+        
+        compra_id = cur.fetchone()[0]
+        
+        for item in data['productos']:
+            cur.execute("""
+                INSERT INTO compras_detalle (compra_id, producto_id, cantidad, precio_unitario, subtotal)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (compra_id, item['producto_id'], item['cantidad'], 
+                  item['precio_unitario'], item['subtotal']))
+            
+            cur.execute("SELECT stock_actual FROM productos WHERE id = %s", (item['producto_id'],))
+            stock_anterior = cur.fetchone()[0]
+            stock_nuevo = stock_anterior + item['cantidad']
+            
+            cur.execute("UPDATE productos SET stock_actual = %s WHERE id = %s", (stock_nuevo, item['producto_id']))
+            
+            cur.execute("""
+                INSERT INTO movimientos_inventario (producto_id, tipo_movimiento, cantidad, 
+                                                   precio_unitario, valor_total, stock_anterior, stock_nuevo)
+                VALUES (%s, 'compra', %s, %s, %s, %s, %s)
+            """, (item['producto_id'], item['cantidad'], item['precio_unitario'],
+                  item['subtotal'], stock_anterior, stock_nuevo))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'id': compra_id, 'message': 'Compra registrada exitosamente'}), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# API - REPORTES
+# ============================================
+
+@app.route('/api/reportes/ventas-diarias', methods=['GET'])
+def reporte_ventas_diarias():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DATE(fecha_venta) as dia, COUNT(*) as cantidad, SUM(total) as total
+            FROM ventas
+            WHERE fecha_venta >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY dia
+            ORDER BY dia
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'dia': str(r[0]), 'cantidad': r[1], 'total': float(r[2])} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/top-productos', methods=['GET'])
+def reporte_top_productos():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT p.nombre, SUM(vd.cantidad) as total
+            FROM ventas_detalle vd
+            JOIN productos p ON vd.producto_id = p.id
+            GROUP BY p.nombre
+            ORDER BY total DESC
+            LIMIT 5
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'nombre': r[0], 'total': r[1]} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/distribucion-categorias', methods=['GET'])
+def reporte_distribucion_categorias():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.nombre as categoria, COUNT(p.id) as cantidad
+            FROM productos p
+            LEFT JOIN categorias c ON p.categoria_id = c.id
+            GROUP BY c.nombre
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'categoria': r[0] or 'Sin categoría', 'cantidad': r[1]} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/compras-mensuales', methods=['GET'])
+def reporte_compras_mensuales():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT TO_CHAR(fecha_compra, 'YYYY-MM') as mes, SUM(total) as total
+            FROM compras
+            GROUP BY mes
+            ORDER BY mes DESC
+            LIMIT 6
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'mes': r[0], 'total': float(r[1])} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/distribucion-clientes', methods=['GET'])
+def reporte_distribucion_clientes():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT tipo, COUNT(*) as cantidad
+            FROM clientes
+            GROUP BY tipo
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'tipo': r[0], 'cantidad': r[1]} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/ultimas-compras', methods=['GET'])
+def reporte_ultimas_compras():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.*, p.nombre as proveedor_nombre
+            FROM compras c
+            LEFT JOIN proveedores p ON c.proveedor_id = p.id
+            ORDER BY c.fecha_compra DESC
+            LIMIT 10
+        """)
+        compras = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = []
+        for row in compras:
+            compra = dict(zip(colnames, row))
+            compra['total'] = float(compra['total']) if compra['total'] else 0
+            result.append(compra)
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/mejores-clientes', methods=['GET'])
+def reporte_mejores_clientes():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.nombres, c.apellidos, SUM(v.total) as total
+            FROM ventas v
+            JOIN clientes c ON v.cliente_id = c.id
+            GROUP BY c.nombres, c.apellidos
+            ORDER BY total DESC
+            LIMIT 5
+        """)
+        resultados = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return jsonify([{'nombres': r[0], 'apellidos': r[1], 'total': float(r[2])} for r in resultados])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# INICIALIZACIÓN
+# ============================================
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("🏪 TIENDA FUNCA - Sistema de Gestión")
+    print("=" * 60)
+    
+    print("\n📦 Inicializando base de datos...")
+    init_db()
+    
+    conn = get_db_connection()
+    if conn:
+        print("✅ Conexión a PostgreSQL exitosa")
+        conn.close()
+    else:
+        print("❌ No se pudo conectar a PostgreSQL")
+    
+    port = int(os.getenv('PORT', 5001))
+    print(f"\n🚀 Servidor listo!")
+    print(f"   📱 Frontend: http://localhost:{port}/")
+    print(f"   🔧 API: http://localhost:{port}/api/dashboard/stats")
+    print("   ⏸️  Para detener: Ctrl+C")
+    print("=" * 60)
+    
+    app.run(debug=True, host='0.0.0.0', port=port)
+
+# ============================================
+# API - CATEGORÍAS (CRUD completo)
+# ============================================
+
+@app.route('/api/categorias', methods=['POST'])
+def create_categoria():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO categorias (nombre, descripcion)
+            VALUES (%s, %s) RETURNING id
+        """, (data['nombre'], data.get('descripcion')))
+        
+        categoria_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'id': categoria_id, 'message': 'Categoría creada exitosamente'}), 201
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/categorias/<int:categoria_id>', methods=['PUT'])
+def update_categoria(categoria_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE categorias 
+            SET nombre = %s, descripcion = %s
+            WHERE id = %s
+        """, (data['nombre'], data.get('descripcion'), categoria_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Categoría actualizada'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/categorias/<int:categoria_id>', methods=['DELETE'])
+def delete_categoria(categoria_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        # Verificar si hay productos usando esta categoría
+        cur.execute("SELECT COUNT(*) FROM productos WHERE categoria_id = %s", (categoria_id,))
+        count = cur.fetchone()[0]
+        if count > 0:
+            return jsonify({'error': f'No se puede eliminar: {count} producto(s) usan esta categoría'}), 400
+        
+        cur.execute("DELETE FROM categorias WHERE id = %s", (categoria_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Categoría eliminada'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/categorias')
+def categorias():
+    return render_template('categorias.html')
+
+@app.route('/api/ventas/<int:venta_id>', methods=['GET'])
+def get_venta_detalle(venta_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        # Datos de la venta
+        cur.execute("""
+            SELECT v.*, c.nombres, c.apellidos, c.documento
+            FROM ventas v
+            LEFT JOIN clientes c ON v.cliente_id = c.id
+            WHERE v.id = %s
+        """, (venta_id,))
+        venta = cur.fetchone()
+        
+        if not venta:
+            return jsonify({'error': 'Venta no encontrada'}), 404
+        
+        colnames = [desc[0] for desc in cur.description]
+        result = dict(zip(colnames, venta))
+        result['subtotal'] = float(result['subtotal']) if result['subtotal'] else 0
+        result['total'] = float(result['total']) if result['total'] else 0
+        result['cliente_nombre'] = f"{result['nombres']} {result['apellidos']}"
+        
+        # Detalles de la venta
+        cur.execute("""
+            SELECT vd.*, p.nombre as producto_nombre,
+                   COALESCE(pvd.entregado_al_cliente, 0) as entregado_cliente
+            FROM ventas_detalle vd
+            JOIN productos p ON vd.producto_id = p.id
+            LEFT JOIN pedidos_proveedor_detalle pvd ON pvd.producto_id = p.id 
+                AND pvd.pedido_id IN (SELECT id FROM pedidos_proveedor WHERE venta_id = %s)
+            WHERE vd.venta_id = %s
+        """, (venta_id, venta_id))
+        
+        detalles = cur.fetchall()
+        colnames2 = [desc[0] for desc in cur.description]
+        result['detalles'] = []
+        for row in detalles:
+            detalle = dict(zip(colnames2, row))
+            detalle['precio_unitario'] = float(detalle['precio_unitario']) if detalle['precio_unitario'] else 0
+            detalle['subtotal'] = float(detalle['subtotal']) if detalle['subtotal'] else 0
+            detalle['entregado_cliente'] = detalle['entregado_cliente'] == detalle['cantidad'] if detalle.get('entregado_cliente') else False
+            result['detalles'].append(detalle)
+        
+        cur.close()
+        conn.close()
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reportes/pedidos-por-proveedor', methods=['GET'])
+def reporte_pedidos_por_proveedor():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                pr.id as proveedor_id,
+                pr.nombre as proveedor_nombre,
+                p.id as producto_id,
+                p.nombre as producto_nombre,
+                SUM(pvd.cantidad_solicitada - pvd.cantidad_recibida) as cantidad_pendiente,
+                pvd.precio_unitario_sugerido as precio_unitario
+            FROM pedidos_proveedor pv
+            JOIN pedidos_proveedor_detalle pvd ON pv.id = pvd.pedido_id
+            JOIN productos p ON pvd.producto_id = p.id
+            JOIN proveedores pr ON pv.proveedor_id = pr.id
+            WHERE pvd.cantidad_recibida < pvd.cantidad_solicitada
+            GROUP BY pr.id, pr.nombre, p.id, p.nombre, pvd.precio_unitario_sugerido
+            ORDER BY pr.nombre, p.nombre
+        """)
+        resultados = cur.fetchall()
+        
+        # Agrupar por proveedor
+        proveedores = {}
+        for row in resultados:
+            prov_id = row[0]
+            if prov_id not in proveedores:
+                proveedores[prov_id] = {
+                    'proveedor_id': prov_id,
+                    'proveedor_nombre': row[1],
+                    'productos': []
+                }
+            proveedores[prov_id]['productos'].append({
+                'producto_id': row[2],
+                'producto_nombre': row[3],
+                'cantidad_pendiente': row[4],
+                'precio_unitario': float(row[5]) if row[5] else 0
+            })
+        
+        cur.close()
+        conn.close()
+        return jsonify(list(proveedores.values()))
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ventas/<int:venta_id>/entregar-producto', methods=['POST'])
+def entregar_producto_cliente(venta_id):
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        producto_id = data['producto_id']
+        cantidad = data['cantidad']
+        
+        # Buscar el pedido asociado a esta venta y producto
+        cur.execute("""
+            SELECT pvd.id, pvd.cantidad_solicitada, pvd.cantidad_recibida, pvd.entregado_al_cliente
+            FROM pedidos_proveedor pv
+            JOIN pedidos_proveedor_detalle pvd ON pv.id = pvd.pedido_id
+            WHERE pv.venta_id = %s AND pvd.producto_id = %s
+        """, (venta_id, producto_id))
+        pedido_detalle = cur.fetchone()
+        
+        if not pedido_detalle:
+            conn.rollback()
+            return jsonify({'error': 'No se encontró pedido para este producto'}), 404
+        
+        pvd_id, cantidad_solicitada, cantidad_recibida, entregado_actual = pedido_detalle
+        entregado_actual = entregado_actual or 0
+        nueva_entrega = entregado_actual + cantidad
+        
+        if nueva_entrega > cantidad_recibida:
+            conn.rollback()
+            return jsonify({'error': f'No se puede entregar más de lo recibido. Recibido: {cantidad_recibida}'}), 400
+        
+        # Actualizar entregado al cliente
+        cur.execute("""
+            UPDATE pedidos_proveedor_detalle 
+            SET entregado_al_cliente = %s, fecha_entrega_cliente = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (nueva_entrega, pvd_id))
+        
+        # Verificar si todos los productos de esta venta han sido entregados
+        cur.execute("""
+            SELECT 
+                SUM(pvd.cantidad_recibida) as total_recibido,
+                SUM(COALESCE(pvd.entregado_al_cliente, 0)) as total_entregado
+            FROM pedidos_proveedor pv
+            JOIN pedidos_proveedor_detalle pvd ON pv.id = pvd.pedido_id
+            WHERE pv.venta_id = %s
+        """, (venta_id,))
+        total_recibido, total_entregado = cur.fetchone()
+        
+        # Si todos los productos recibidos han sido entregados, marcar venta como completada
+        if total_recibido == total_entregado:
+            cur.execute("UPDATE ventas SET estado = 'completada' WHERE id = %s", (venta_id,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            'message': f'Entregado {cantidad} unidades al cliente',
+            'venta_completada': total_recibido == total_entregado
+        })
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pedidos-venta/detallados', methods=['GET'])
+def get_pedidos_venta_detallados():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                pv.id as pedido_id,
+                pvd.id as pedido_detalle_id,
+                pv.numero_pedido,
+                pv.venta_id,
+                v.numero_factura,
+                c.nombres || ' ' || c.apellidos as cliente,
+                pr.nombre as proveedor,
+                p.id as producto_id,
+                p.nombre as producto_nombre,
+                pvd.cantidad_solicitada,
+                pvd.cantidad_recibida,
+                COALESCE(pvd.entregado_al_cliente, 0) as entregado_cliente,
+                pvd.fecha_entrega_cliente
+            FROM pedidos_proveedor pv
+            JOIN pedidos_proveedor_detalle pvd ON pv.id = pvd.pedido_id
+            JOIN ventas v ON pv.venta_id = v.id
+            JOIN clientes c ON v.cliente_id = c.id
+            JOIN proveedores pr ON pv.proveedor_id = pr.id
+            JOIN productos p ON pvd.producto_id = p.id
+            ORDER BY pv.fecha_pedido DESC
+        """)
+        resultados = cur.fetchall()
+        colnames = [desc[0] for desc in cur.description]
+        result = [dict(zip(colnames, row)) for row in resultados]
+        cur.close()
+        conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pedidos-detalle/recibir', methods=['POST'])
+def recibir_pedido_detalle():
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Error de conexión'}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN")
+        
+        cur.execute("""
+            SELECT cantidad_solicitada, cantidad_recibida, producto_id, pedido_id
+            FROM pedidos_proveedor_detalle 
+            WHERE id = %s
+        """, (data['pedido_detalle_id'],))
+        detalle = cur.fetchone()
+        
+        if not detalle:
+            return jsonify({'error': 'Detalle no encontrado'}), 404
+        
+        cantidad_solicitada, cantidad_recibida, producto_id, pedido_id = detalle
+        nueva_recibida = cantidad_recibida + data['cantidad']
+        
+        if nueva_recibida > cantidad_solicitada:
+            return jsonify({'error': 'No se puede recibir más de lo solicitado'}), 400
+        
+        cur.execute("""
+            UPDATE pedidos_proveedor_detalle 
+            SET cantidad_recibida = %s 
+            WHERE id = %s
+        """, (nueva_recibida, data['pedido_detalle_id']))
+        
+        # Actualizar stock
+        cur.execute("SELECT stock_actual FROM productos WHERE id = %s", (producto_id,))
+        stock_anterior = cur.fetchone()[0]
+        stock_nuevo = stock_anterior + data['cantidad']
+        cur.execute("UPDATE productos SET stock_actual = %s WHERE id = %s", (stock_nuevo, producto_id))
+        
+        # Registrar movimiento
+        cur.execute("""
+            INSERT INTO movimientos_inventario (producto_id, tipo_movimiento, cantidad, stock_anterior, stock_nuevo, observaciones)
+            VALUES (%s, 'recepcion_pedido', %s, %s, %s, %s)
+        """, (producto_id, data['cantidad'], stock_anterior, stock_nuevo, data.get('observaciones')))
+        
+        # Verificar si el pedido está completo
+        cur.execute("""
+            SELECT COUNT(*) FROM pedidos_proveedor_detalle 
+            WHERE pedido_id = %s AND cantidad_recibida < cantidad_solicitada
+        """, (pedido_id,))
+        pendientes = cur.fetchone()[0]
+        
+        if pendientes == 0:
+            cur.execute("UPDATE pedidos_proveedor SET estado = 'recibido_total' WHERE id = %s", (pedido_id,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({'message': f'Recepción registrada: {data["cantidad"]} unidades'})
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/factura')
+def factura():
+    return render_template('factura.html')
+
+@app.route('/reporte-pedidos')
+def reporte_pedidos():
+    return render_template('reporte_pedidos.html')

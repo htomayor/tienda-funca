@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+
+{% block title %}Reportes - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="fas fa-chart-line"></i> Reportes y Estadísticas</h1>
+    </div>
+</div>
+
+<!-- Pestañas de reportes -->
+<ul class="nav nav-tabs mb-4">
+    <li class="nav-item">
+        <a class="nav-link active" data-bs-toggle="tab" href="#ventasReporte">Ventas</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="tab" href="#productosReporte">Productos</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="tab" href="#comprasReporte">Compras</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link" data-bs-toggle="tab" href="#clientesReporte">Clientes</a>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- Reporte de Ventas -->
+    <div class="tab-pane fade show active" id="ventasReporte">
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-chart-line"></i> Ventas por Día (Últimos 30 días)</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="ventasDiariasChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-trophy"></i> Top Productos Más Vendidos</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="topProductosChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reporte de Productos -->
+    <div class="tab-pane fade" id="productosReporte">
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-chart-pie"></i> Distribución por Categoría</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="categoriasChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-exclamation-triangle"></i> Productos con Stock Bajo</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="stockBajoLista" style="max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reporte de Compras -->
+    <div class="tab-pane fade" id="comprasReporte">
+        <div class="row">
+            <div class="col-12 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-chart-bar"></i> Compras por Mes</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="comprasMensualesChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-truck"></i> Últimas Compras</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Factura</th>
+                                        <th>Proveedor</th>
+                                        <th>Fecha</th>
+                                        <th>Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ultimasCompras"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reporte de Clientes -->
+    <div class="tab-pane fade" id="clientesReporte">
+        <div class="row">
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-chart-pie"></i> Distribución por Tipo de Cliente</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="clientesTipoChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-trophy"></i> Mejores Clientes (por compras)</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="mejoresClientesLista" style="max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let ventasDiariasChart, topProductosChart, categoriasChart, comprasMensualesChart, clientesTipoChart;
+
+// Cargar datos de ventas diarias
+function cargarVentasDiarias() {
+    fetch('/api/reportes/ventas-diarias')
+        .then(response => response.json())
+        .then(data => {
+            if (ventasDiariasChart) ventasDiariasChart.destroy();
+            const ctx = document.getElementById('ventasDiariasChart').getContext('2d');
+            ventasDiariasChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.dia),
+                    datasets: [{
+                        label: 'Ventas (COP)',
+                        data: data.map(d => d.total),
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => `$${formatNumber(context.raw)}`
+                            }
+                        }
+                    }
+                }
+            });
+        });
+}
+
+// Cargar top productos
+function cargarTopProductos() {
+    fetch('/api/reportes/top-productos')
+        .then(response => response.json())
+        .then(data => {
+            if (topProductosChart) topProductosChart.destroy();
+            const ctx = document.getElementById('topProductosChart').getContext('2d');
+            topProductosChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(d => d.nombre),
+                    datasets: [{
+                        label: 'Unidades Vendidas',
+                        data: data.map(d => d.total),
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    indexAxis: 'y'
+                }
+            });
+        });
+}
+
+// Cargar distribución de categorías
+function cargarDistribucionCategorias() {
+    fetch('/api/reportes/distribucion-categorias')
+        .then(response => response.json())
+        .then(data => {
+            if (categoriasChart) categoriasChart.destroy();
+            const ctx = document.getElementById('categoriasChart').getContext('2d');
+            categoriasChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: data.map(d => d.categoria),
+                    datasets: [{
+                        data: data.map(d => d.cantidad),
+                        backgroundColor: ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336']
+                    }]
+                }
+            });
+        });
+}
+
+// Cargar stock bajo
+function cargarStockBajo() {
+    fetch('/api/productos')
+        .then(response => response.json())
+        .then(data => {
+            const stockBajo = data.filter(p => p.stock_actual <= p.stock_minimo);
+            const container = document.getElementById('stockBajoLista');
+            if (stockBajo.length === 0) {
+                container.innerHTML = '<div class="alert alert-success">No hay productos con stock bajo</div>';
+            } else {
+                let html = '<ul class="list-group">';
+                stockBajo.forEach(p => {
+                    html += `<li class="list-group-item d-flex justify-content-between">
+                        ${p.nombre} <span class="badge bg-danger">Stock: ${p.stock_actual}</span>
+                    </li>`;
+                });
+                html += '</ul>';
+                container.innerHTML = html;
+            }
+        });
+}
+
+// Cargar compras mensuales
+function cargarComprasMensuales() {
+    fetch('/api/reportes/compras-mensuales')
+        .then(response => response.json())
+        .then(data => {
+            if (comprasMensualesChart) comprasMensualesChart.destroy();
+            const ctx = document.getElementById('comprasMensualesChart').getContext('2d');
+            comprasMensualesChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(d => d.mes),
+                    datasets: [{
+                        label: 'Compras (COP)',
+                        data: data.map(d => d.total),
+                        backgroundColor: 'rgba(255, 99, 132, 0.5)'
+                    }]
+                }
+            });
+        });
+}
+
+// Cargar distribución de clientes
+function cargarDistribucionClientes() {
+    fetch('/api/reportes/distribucion-clientes')
+        .then(response => response.json())
+        .then(data => {
+            if (clientesTipoChart) clientesTipoChart.destroy();
+            const ctx = document.getElementById('clientesTipoChart').getContext('2d');
+            clientesTipoChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: data.map(d => d.tipo),
+                    datasets: [{
+                        data: data.map(d => d.cantidad),
+                        backgroundColor: ['#4CAF50', '#2196F3', '#FF9800']
+                    }]
+                }
+            });
+        });
+}
+
+// Inicializar todos los reportes
+document.addEventListener('DOMContentLoaded', () => {
+    cargarVentasDiarias();
+    cargarTopProductos();
+    cargarDistribucionCategorias();
+    cargarStockBajo();
+    cargarComprasMensuales();
+    cargarDistribucionClientes();
+    
+    fetch('/api/reportes/ultimas-compras')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('ultimasCompras');
+            tbody.innerHTML = data.map(c => `
+                <tr>
+                    <td>${c.numero_factura}</td>
+                    <td>${c.proveedor_nombre}</td>
+                    <td>${c.fecha_compra}</td>
+                    <td>$${formatNumber(c.total)}</td>
+                </tr>
+            `).join('');
+        });
+    
+    fetch('/api/reportes/mejores-clientes')
+        .then(response => response.json())
+        .then(data => {
+            const container = document.getElementById('mejoresClientesLista');
+            if (data.length === 0) {
+                container.innerHTML = '<div class="alert alert-info">No hay datos</div>';
+            } else {
+                let html = '<ul class="list-group">';
+                data.forEach(c => {
+                    html += `<li class="list-group-item d-flex justify-content-between">
+                        ${c.nombres} ${c.apellidos} <span class="badge bg-success">$${formatNumber(c.total)}</span>
+                    </li>`;
+                });
+                html += '</ul>';
+                container.innerHTML = html;
+            }
+        });
+});
+</script>
+{% endblock %}

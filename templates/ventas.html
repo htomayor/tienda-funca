@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}Ventas - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4"><i class="fas fa-shopping-cart"></i> Punto de Venta</h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header">
+                <input type="text" id="buscarProducto" class="form-control" placeholder="Buscar producto...">
+            </div>
+            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                <div class="row" id="productosGrid"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-shopping-cart"></i> Carrito</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Cliente</label>
+                    <select id="cliente_id" class="form-select">
+                        <option value="">Seleccione...</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Forma de Pago</label>
+                    <select id="forma_pago" class="form-select">
+                        <option value="efectivo">Efectivo</option>
+                        <option value="tarjeta">Tarjeta</option>
+                        <option value="transferencia">Transferencia</option>
+                    </select>
+                </div>
+                
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr><th>Producto</th><th>Cant</th><th>Precio</th><th>Subtotal</th><th></th></tr>
+                        </thead>
+                        <tbody id="carritoItems"></tbody>
+                        <tfoot>
+                            <tr class="fw-bold"><td colspan="3">Total:</td><td id="carritoTotal">$0</td><td></td></tr>
+                        </tfoot>
+                    </table>
+                </div>
+                
+                <button class="btn btn-success w-100" onclick="procesarVenta()">
+                    <i class="fas fa-check"></i> Procesar Venta
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-history"></i> Últimas Ventas</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead><tr><th>Factura</th><th>Cliente</th><th>Fecha</th><th>Total</th><th>Estado</th></tr></thead>
+                        <tbody id="historialVentas"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let carrito = [];
+let productosTienda = [];
+
+function cargarProductosTienda() {
+    fetch('/api/productos')
+        .then(response => response.json())
+        .then(data => {
+            productosTienda = data.filter(p => p.stock_actual > 0 || p.requiere_pedido);
+            mostrarProductosGrid(productosTienda);
+        });
+}
+
+function mostrarProductosGrid(productos) {
+    const grid = document.getElementById('productosGrid');
+    if (productos.length === 0) {
+        grid.innerHTML = '<div class="col-12 text-center">No hay productos</div>';
+        return;
+    }
+    
+    let html = '';
+    productos.forEach(p => {
+        html += `<div class="col-md-4 mb-3">
+            <div class="card product-card h-100" onclick="agregarAlCarrito(${p.id})">
+                <div class="card-body text-center">
+                    <i class="fas fa-box fa-2x mb-2 text-primary"></i>
+                    <h6 class="card-title">${p.nombre}</h6>
+                    <p class="card-text text-success fw-bold">$${formatNumber(p.precio_venta)}</p>
+                    <small class="text-muted">Stock: ${p.stock_actual} ${p.requiere_pedido ? '<span class="badge bg-warning">Bajo pedido</span>' : ''}</small>
+                </div>
+            </div>
+        </div>`;
+    });
+    grid.innerHTML = html;
+}
+
+function agregarAlCarrito(productoId) {
+    const producto = productosTienda.find(p => p.id === productoId);
+    if (!producto) return;
+    
+    const existente = carrito.find(item => item.id === productoId);
+    if (existente) {
+        existente.cantidad++;
+    } else {
+        carrito.push({
+            id: producto.id,
+            nombre: producto.nombre,
+            precio: producto.precio_venta,
+            cantidad: 1
+        });
+    }
+    actualizarCarrito();
+}
+
+function actualizarCarrito() {
+    const tbody = document.getElementById('carritoItems');
+    let total = 0;
+    
+    if (carrito.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center">Carrito vacío</td></tr>';
+        document.getElementById('carritoTotal').innerHTML = '$0';
+        return;
+    }
+    
+    let html = '';
+    carrito.forEach((item, index) => {
+        const subtotal = item.precio * item.cantidad;
+        total += subtotal;
+        html += `<tr>
+            <td>${item.nombre}</td>
+            <td><input type="number" class="form-control form-control-sm" style="width: 60px;" value="${item.cantidad}" min="1" onchange="actualizarCantidad(${index}, this.value)"></td>
+            <td>$${formatNumber(item.precio)}</td>
+            <td>$${formatNumber(subtotal)}</td>
+            <td><button class="btn btn-sm btn-danger" onclick="eliminarDelCarrito(${index})">×</button></td>
+        </tr>`;
+    });
+    tbody.innerHTML = html;
+    document.getElementById('carritoTotal').innerHTML = `$${formatNumber(total)}`;
+}
+
+function actualizarCantidad(index, cantidad) {
+    carrito[index].cantidad = parseInt(cantidad);
+    actualizarCarrito();
+}
+
+function eliminarDelCarrito(index) {
+    carrito.splice(index, 1);
+    actualizarCarrito();
+}
+
+function cargarClientes() {
+    fetch('/api/clientes')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('cliente_id');
+            select.innerHTML = '<option value="">Seleccione...</option>';
+            data.forEach(c => {
+                select.innerHTML += `<option value="${c.id}">${c.nombres} ${c.apellidos}</option>`;
+            });
+        });
+}
+
+function procesarVenta() {
+    const clienteId = document.getElementById('cliente_id').value;
+    const formaPago = document.getElementById('forma_pago').value;
+    
+    if (!clienteId) {
+        mostrarAlerta('Seleccione un cliente', 'warning');
+        return;
+    }
+    
+    if (carrito.length === 0) {
+        mostrarAlerta('Agregue productos', 'warning');
+        return;
+    }
+    
+    const productos = carrito.map(item => ({
+        producto_id: item.id,
+        cantidad: item.cantidad,
+        precio: item.precio,
+        subtotal: item.precio * item.cantidad
+    }));
+    
+    const subtotal = productos.reduce((sum, p) => sum + p.subtotal, 0);
+    const iva = subtotal * 0.19;
+    const total = subtotal + iva;
+    const facturaNum = `FAC-${Date.now()}`;
+    
+    fetch('/api/ventas', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            cliente_id: parseInt(clienteId),
+            numero_factura: facturaNum,
+            productos: productos,
+            subtotal: subtotal,
+            iva: iva,
+            total: total,
+            forma_pago: formaPago
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.id) {
+            mostrarAlerta(`Venta registrada - Factura: ${data.factura}`, 'success');
+            carrito = [];
+            actualizarCarrito();
+            cargarProductosTienda();
+            cargarHistorialVentas();
+        } else {
+            mostrarAlerta(data.error || 'Error', 'danger');
+        }
+    });
+}
+
+function cargarHistorialVentas() {
+    fetch('/api/ventas')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('historialVentas');
+            tbody.innerHTML = data.map(v => `<tr>
+                <td>${v.numero_factura}</td>
+                <td>${v.nombres || ''} ${v.apellidos || ''}</td>
+                <td>${new Date(v.fecha_venta).toLocaleString()}</td>
+                <td>$${formatNumber(v.total)}</td>
+                <td><span class="badge bg-success">${v.estado}</span></td>
+            </tr>`).join('');
+        });
+}
+
+document.getElementById('buscarProducto').addEventListener('keyup', (e) => {
+    const search = e.target.value.toLowerCase();
+    const filtrados = productosTienda.filter(p => p.nombre.toLowerCase().includes(search));
+    mostrarProductosGrid(filtrados);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    cargarProductosTienda();
+    cargarClientes();
+    cargarHistorialVentas();
+});
+</script>
+{% endblock %}

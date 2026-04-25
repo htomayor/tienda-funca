@@ -1,0 +1,41 @@
+===========================================
+🏪 TIENDA FUNCA - Guía Rápida
+===========================================
+
+📁 Ubicación: /var/www/funca/tienda
+
+🚀 INICIAR SERVIDOR:
+   cd /var/www/funca/tienda
+   source venv/bin/activate
+   export FLASK_APP=app.py
+   flask run --host=0.0.0.0 --port=5001
+
+   O usar el script:
+   ./run.sh
+
+🌐 ACCEDER:
+   http://localhost:5001/
+
+📋 MÓDULOS DISPONIBLES:
+   /           → Dashboard
+   /productos  → Gestión de productos
+   /ventas     → Punto de venta
+   /compras    → Gestión de compras
+   /inventario → Control de inventario
+   /clientes   → Gestión de clientes
+   /reportes   → Estadísticas
+
+🛑 DETENER SERVIDOR:
+   Ctrl + C
+
+📦 BASE DE DATOS:
+   PostgreSQL
+   Database: tienda_db
+   User: tienda_user
+   Password: Tienda2024!
+
+🔧 MANTENIMIENTO:
+   - Backup BD: pg_dump -U tienda_user tienda_db > backup.sql
+   - Ver logs: tail -f /var/log/postgresql/postgresql-*.log
+
+===========================================

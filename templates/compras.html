@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}Compras - Tienda FUNCA{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1><i class="fas fa-truck"></i> Compras a Proveedores</h1>
+            <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#modalCompra" onclick="limpiarFormularioCompra()">
+                <i class="fas fa-plus"></i> Nueva Compra
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Lista de compras -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="row">
+                    <div class="col-md-4">
+                        <input type="text" id="buscarCompra" class="form-control" placeholder="Buscar por factura o proveedor...">
+                    </div>
+                    <div class="col-md-3">
+                        <input type="date" id="filtroFecha" class="form-control">
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Factura</th>
+                                <th>Proveedor</th>
+                                <th>Fecha</th>
+                                <th>Subtotal</th>
+                                <th>IVA</th>
+                                <th>Total</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tablaCompras"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para nueva compra -->
+<div class="modal fade" id="modalCompra" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-truck"></i> Registrar Compra</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="formCompra">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Proveedor *</label>
+                            <select id="proveedor_id" class="form-select" required>
+                                <option value="">Seleccione proveedor...</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Número Factura *</label>
+                            <input type="text" id="numero_factura" class="form-control" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Fecha Compra *</label>
+                            <input type="date" id="fecha_compra" class="form-control" required>
+                        </div>
+                    </div>
+                    
+                    <h5 class="mt-3">Productos</h5>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th>Cantidad</th>
+                                    <th>Precio Unit.</th>
+                                    <th>Subtotal</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="detalleCompraItems">
+                                <tr id="fila-producto-0">
+                                    <td>
+                                        <select class="form-select producto-select" data-index="0" onchange="actualizarSubtotal(0)">
+                                            <option value="">Seleccione...</option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input type="number" class="form-control cantidad-input" data-index="0" value="1" min="1" onchange="actualizarSubtotal(0)">
+                                    </td>
+                                    <td>
+                                        <input type="number" class="form-control precio-input" data-index="0" value="0" step="100" onchange="actualizarSubtotal(0)">
+                                    </td>
+                                    <td>
+                                        <span class="subtotal-valor" data-index="0">$0</span>
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" onclick="eliminarFilaCompra(0)">×</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <td colspan="4">
+                                        <button type="button" class="btn btn-sm btn-info" onclick="agregarFilaCompra()">
+                                            <i class="fas fa-plus"></i> Agregar Producto
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                    
+                    <div class="row mt-3">
+                        <div class="col-md-4 offset-md-8">
+                            <table class="table table-bordered">
+                                <tr>
+                                    <td>Subtotal:</td>
+                                    <td class="text-end" id="compraSubtotal">$0</td>
+                                </tr>
+                                <tr>
+                                    <td>IVA (19%):</td>
+                                    <td class="text-end" id="compraIVA">$0</td>
+                                </tr>
+                                <tr class="fw-bold">
+                                    <td>Total:</td>
+                                    <td class="text-end" id="compraTotal">$0</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-success" onclick="guardarCompra()">Registrar Compra</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let filaCompraIndex = 1;
+let productosCatalogo = [];
+
+// Cargar proveedores
+function cargarProveedores() {
+    fetch('/api/proveedores')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('proveedor_id');
+            select.innerHTML = '<option value="">Seleccione proveedor...</option>';
+            data.forEach(p => {
+                select.innerHTML += `<option value="${p.id}">${p.nombre} - ${p.nit}</option>`;
+            });
+        });
+}
+
+// Cargar productos para selectores
+function cargarProductosCompra() {
+    fetch('/api/productos')
+        .then(response => response.json())
+        .then(data => {
+            productosCatalogo = data;
+            // Actualizar todos los selects
+            document.querySelectorAll('.producto-select').forEach(select => {
+                const currentValue = select.value;
+                select.innerHTML = '<option value="">Seleccione...</option>';
+                productosCatalogo.forEach(p => {
+                    select.innerHTML += `<option value='${JSON.stringify(p)}' ${currentValue === JSON.stringify(p) ? 'selected' : ''}>
+                        ${p.nombre} - $${formatNumber(p.precio_compra)}
+                    </option>`;
+                });
+            });
+        });
+}
+
+// Agregar fila al detalle
+function agregarFilaCompra() {
+    const tbody = document.getElementById('detalleCompraItems');
+    const newRow = document.createElement('tr');
+    newRow.id = `fila-producto-${filaCompraIndex}`;
+    newRow.innerHTML = `
+        <td>
+            <select class="form-select producto-select" data-index="${filaCompraIndex}" onchange="actualizarSubtotal(${filaCompraIndex})">
+                <option value="">Seleccione...</option>
+            </select>
+        </td>
+        <td>
+            <input type="number" class="form-control cantidad-input" data-index="${filaCompraIndex}" value="1" min="1" onchange="actualizarSubtotal(${filaCompraIndex})">
+        </td>
+        <td>
+            <input type="number" class="form-control precio-input" data-index="${filaCompraIndex}" value="0" step="100" onchange="actualizarSubtotal(${filaCompraIndex})">
+        </td>
+        <td>
+            <span class="subtotal-valor" data-index="${filaCompraIndex}">$0</span>
+        </td>
+        <td>
+            <button class="btn btn-danger btn-sm" onclick="eliminarFilaCompra(${filaCompraIndex})">×</button>
+        </td>
+    `;
+    tbody.appendChild(newRow);
+    filaCompraIndex++;
+    cargarProductosCompra();
+}
+
+// Eliminar fila
+function eliminarFilaCompra(index) {
+    const row = document.getElementById(`fila-producto-${index}`);
+    if (row) row.remove();
+    calcularTotalesCompra();
+}
+
+// Actualizar subtotal de una fila
+function actualizarSubtotal(index) {
+    const cantidad = parseFloat(document.querySelector(`.cantidad-input[data-index="${index}"]`).value) || 0;
+    const precio = parseFloat(document.querySelector(`.precio-input[data-index="${index}"]`).value) || 0;
+    const subtotal = cantidad * precio;
+    document.querySelector(`.subtotal-valor[data-index="${index}"]`).innerHTML = `$${formatNumber(subtotal)}`;
+    calcularTotalesCompra();
+}
+
+// Calcular totales de la compra
+function calcularTotalesCompra() {
+    let subtotal = 0;
+    document.querySelectorAll('.subtotal-valor').forEach(el => {
+        const valor = parseFloat(el.innerHTML.replace('$', '').replace(/\./g, '')) || 0;
+        subtotal += valor;
+    });
+    const iva = subtotal * 0.19;
+    const total = subtotal + iva;
+    
+    document.getElementById('compraSubtotal').innerHTML = `$${formatNumber(subtotal)}`;
+    document.getElementById('compraIVA').innerHTML = `$${formatNumber(iva)}`;
+    document.getElementById('compraTotal').innerHTML = `$${formatNumber(total)}`;
+}
+
+// Guardar compra
+function guardarCompra() {
+    const proveedor_id = document.getElementById('proveedor_id').value;
+    const numero_factura = document.getElementById('numero_factura').value;
+    const fecha_compra = document.getElementById('fecha_compra').value;
+    
+    if (!proveedor_id || !numero_factura || !fecha_compra) {
+        mostrarAlerta('Complete todos los campos', 'warning');
+        return;
+    }
+    
+    const productos = [];
+    document.querySelectorAll('.producto-select').forEach((select, idx) => {
+        if (select.value) {
+            const producto = JSON.parse(select.value);
+            const cantidad = parseFloat(document.querySelector(`.cantidad-input[data-index="${idx}"]`).value);
+            const precio = parseFloat(document.querySelector(`.precio-input[data-index="${idx}"]`).value);
+            productos.push({
+                producto_id: producto.id,
+                cantidad: cantidad,
+                precio_unitario: precio,
+                subtotal: cantidad * precio
+            });
+        }
+    });
+    
+    if (productos.length === 0) {
+        mostrarAlerta('Agregue al menos un producto', 'warning');
+        return;
+    }
+    
+    const subtotal = parseFloat(document.getElementById('compraSubtotal').innerHTML.replace('$', '').replace(/\./g, ''));
+    const iva = parseFloat(document.getElementById('compraIVA').innerHTML.replace('$', '').replace(/\./g, ''));
+    const total = parseFloat(document.getElementById('compraTotal').innerHTML.replace('$', '').replace(/\./g, ''));
+    
+    const data = {
+        proveedor_id: parseInt(proveedor_id),
+        numero_factura: numero_factura,
+        fecha_compra: fecha_compra,
+        productos: productos,
+        subtotal: subtotal,
+        iva: iva,
+        total: total
+    };
+    
+    fetch('/api/compras', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.id) {
+            mostrarAlerta('Compra registrada exitosamente', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('modalCompra')).hide();
+            cargarCompras();
+        } else {
+            mostrarAlerta(data.error || 'Error al registrar', 'danger');
+        }
+    });
+}
+
+// Cargar lista de compras
+function cargarCompras() {
+    fetch('/api/compras')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('tablaCompras');
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center">No hay compras registradas</td></tr>';
+                return;
+            }
+            
+            let html = '';
+            data.forEach(c => {
+                html += `
+                    <tr>
+                        <td>${c.numero_factura}</td>
+                        <td>${c.proveedor_nombre || '-'}</td>
+                        <td>${c.fecha_compra}</td>
+                        <td>$${formatNumber(c.subtotal)}</td>
+                        <td>$${formatNumber(c.iva)}</td>
+                        <td class="fw-bold">$${formatNumber(c.total)}</td>
+                        <td><span class="badge bg-success">${c.estado}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-info" onclick="verDetalleCompra(${c.id})">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        });
+}
+
+function limpiarFormularioCompra() {
+    document.getElementById('proveedor_id').value = '';
+    document.getElementById('numero_factura').value = '';
+    document.getElementById('fecha_compra').value = new Date().toISOString().split('T')[0];
+    
+    // Limpiar filas excepto la primera
+    const tbody = document.getElementById('detalleCompraItems');
+    tbody.innerHTML = `
+        <tr id="fila-producto-0">
+            <td><select class="form-select producto-select" data-index="0" onchange="actualizarSubtotal(0)"></select></td>
+            <td><input type="number" class="form-control cantidad-input" data-index="0" value="1" min="1" onchange="actualizarSubtotal(0)"></td>
+            <td><input type="number" class="form-control precio-input" data-index="0" value="0" step="100" onchange="actualizarSubtotal(0)"></td>
+            <td><span class="subtotal-valor" data-index="0">$0</span></td>
+            <td><button class="btn btn-danger btn-sm" onclick="eliminarFilaCompra(0)">×</button></td>
+        </tr>
+    `;
+    filaCompraIndex = 1;
+    cargarProductosCompra();
+    calcularTotalesCompra();
+}
+
+// Inicializar
+document.addEventListener('DOMContentLoaded', () => {
+    cargarProveedores();
+    cargarProductosCompra();
+    cargarCompras();
+    document.getElementById('fecha_compra').value = new Date().toISOString().split('T')[0];
+});
+</script>
+{% endblock %}
