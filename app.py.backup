@@ -1,7 +1,6 @@
-from flask import Flask, render_template, jsonify, request, session, flash, redirect, url_for
+from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 from utils.db import get_db_connection, init_db
-from utils.auth import login_required, authenticate_user, hash_password, verify_password
 import os
 from datetime import datetime
 from dotenv import load_dotenv
